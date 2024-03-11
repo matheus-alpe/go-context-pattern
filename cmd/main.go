@@ -3,12 +3,20 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 )
 
+func init() {
+	fmt.Printf("Process ID: %v\n", os.Getpid())
+}
+
 func main() {
 	var wg sync.WaitGroup
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -43,7 +51,17 @@ func main() {
 	wg.Add(1)
 	go func3(ctx, &wg, infiniteBananas)
 
+	sc := make(chan os.Signal, 1)
+	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR1, syscall.SIGUSR2)
+
+	go func() {
+		<-sc
+		fmt.Println("=== Shutdown received ===")
+		cancel()
+	}()
+
 	wg.Wait()
+	fmt.Println("All workers done, shutting down!")
 }
 
 func func1(parentCtx context.Context, parentWg *sync.WaitGroup, stream <-chan interface{}) {
@@ -52,16 +70,15 @@ func func1(parentCtx context.Context, parentWg *sync.WaitGroup, stream <-chan in
 
 	doWork := func(ctx context.Context, id int) {
 		defer wg.Done()
-		fmt.Printf("doWork[%d]: start\n", id)
+		fmt.Printf("@@ doWork[%d]: start\n", id)
 
 		for {
 			select {
 			case <-ctx.Done():
-				fmt.Printf("doWork[%d]: done\n", id)
+				fmt.Printf("@@ doWork[%d]: done\n", id)
 				return
 			case d, ok := <-stream:
 				if !ok {
-					fmt.Println("channel closed")
 					return
 				}
 				fmt.Println(d)
@@ -71,7 +88,7 @@ func func1(parentCtx context.Context, parentWg *sync.WaitGroup, stream <-chan in
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(parentCtx, time.Second*2)
+	ctx, cancel := context.WithTimeout(parentCtx, time.Second*3)
 	defer cancel()
 
 	for i := 0; i < 3; i++ {
@@ -87,7 +104,7 @@ type genericReturnFunc func(ctx context.Context, wg *sync.WaitGroup, stream <-ch
 func genericFunc(name string) genericReturnFunc {
 	return func(ctx context.Context, wg *sync.WaitGroup, stream <-chan interface{}) {
 		defer wg.Done()
-		fmt.Printf("genericFunc[%s]: start\n", name)
+		fmt.Printf("-- genericFunc[%s]: start\n", name)
 
 		ctxDeadline, cancel := context.WithDeadline(ctx, time.Now().Add(time.Second*5))
 		defer cancel()
@@ -95,11 +112,10 @@ func genericFunc(name string) genericReturnFunc {
 		for {
 			select {
 			case <-ctxDeadline.Done():
-				fmt.Printf("genericFunc[%s]: done\n", name)
+				fmt.Printf("-- genericFunc[%s]: done\n", name)
 				return
 			case d, ok := <-stream:
 				if !ok {
-					fmt.Println("channel closed")
 					return
 				}
 				fmt.Println(d)
